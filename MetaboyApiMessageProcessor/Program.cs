@@ -21,7 +21,7 @@ public class Program
     static string AzureServiceBusConnectionString = "";
 
     // name of your Service Bus queue
-    static string queueName = "main";
+    static string queueName = "test";
 
     // the client that owns the connection and can be used to create senders and receivers
     static ServiceBusClient client;

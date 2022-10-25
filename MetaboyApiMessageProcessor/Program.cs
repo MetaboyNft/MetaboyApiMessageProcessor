@@ -285,6 +285,7 @@ public class Program
 
                 if(nftTransferResponse.Contains("process") || nftTransferResponse.Contains("received"))
                 {
+                    /*
                     try
                     {
                         using (IDbConnection db = new System.Data.SqlClient.SqlConnection(AzureSqlConnectionString))
@@ -304,6 +305,7 @@ public class Program
                     {
                         Console.WriteLine(ex.Message);
                     }
+                    */
                 }
             }
             catch (Exception ex)

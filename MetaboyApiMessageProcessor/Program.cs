@@ -88,6 +88,7 @@ public class Program
         Console.WriteLine($"Received: {body}");
         NftReciever nftReciever = JsonConvert.DeserializeObject<NftReciever>(body);
         int? validStatus = null;
+        /*
         try
         {
             using (IDbConnection db = new System.Data.SqlClient.SqlConnection(AzureSqlConnectionString))
@@ -111,6 +112,9 @@ public class Program
             validStatus = 0;
             Console.WriteLine(ex.Message);
         }
+        */
+
+        validStatus = 1;
 
         if(validStatus == 1)
         {

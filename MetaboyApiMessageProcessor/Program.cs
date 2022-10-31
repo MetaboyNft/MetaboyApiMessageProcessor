@@ -15,6 +15,7 @@ using System.Data;
 using MetaboyApi.Models;
 using System.Globalization;
 using System.Data.SqlClient;
+using System.Diagnostics;
 
 public class Program
 {
@@ -90,8 +91,13 @@ public class Program
         NftReciever nftReciever = JsonConvert.DeserializeObject<NftReciever>(body);
         int? validStatus = null;
         string nftAmount = "";
+        var timer = new Stopwatch();
+        string timerText = "";
         try
         {
+           
+            timer.Start();
+
             using (SqlConnection db = new System.Data.SqlClient.SqlConnection(AzureSqlConnectionString))
             {
                 await db.OpenAsync();
@@ -118,6 +124,12 @@ public class Program
                     validStatus = 0; //not valid, don't continue
                 }
             }
+
+            timer.Stop();
+            TimeSpan timeTaken = timer.Elapsed;
+            timerText = "Time taken sql query: " + timeTaken.ToString(@"m\:ss\.fff");
+            Console.WriteLine(timerText);
+
         }
         catch (Exception ex)
         {
@@ -142,16 +154,34 @@ public class Program
             string transferMemo = "<3 MetaBoy";
             try
             {
+                timer.Start();
                 userNftToken = await loopringService.GetTokenIdWithCheck(settings.LoopringApiKey, settings.LoopringAccountId, nftData);
+                timer.Stop();
+                TimeSpan timeTaken = timer.Elapsed;
+                timerText = "Time taken get token id: " + timeTaken.ToString(@"m\:ss\.fff");
+                Console.WriteLine(timerText);
+
                 nftTokenId = userNftToken.data[0].tokenId;
                 var toAddress = nftReciever.Address;
 
                 //Storage id
+                timer.Start();
                 var storageId = await loopringService.GetNextStorageId(loopringApiKey, fromAccountId, nftTokenId);
+                timer.Stop();
+                timeTaken = timer.Elapsed;
+                timerText = "Time taken get next storage id: " + timeTaken.ToString(@"m\:ss\.fff");
+                Console.WriteLine(timerText);
 
                 //Getting the offchain fee
+                //Storage id
+                timer.Start();
                 var offChainFee = await loopringService.GetOffChainFee(loopringApiKey, fromAccountId, 11, "0");
+                timer.Stop();
+                timeTaken = timer.Elapsed;
+                timerText = "Time taken get next offchain fee: " + timeTaken.ToString(@"m\:ss\.fff");
+                Console.WriteLine(timerText);
 
+                timer.Start();
                 //Calculate eddsa signautre
                 BigInteger[] poseidonInputs =
         {
@@ -269,6 +299,12 @@ public class Program
                 var serializedECDRSASignature = EthECDSASignature.CreateStringSignature(ECDRSASignature);
                 var ecdsaSignature = serializedECDRSASignature + "0" + (int)2;
 
+                timer.Stop();
+                timeTaken = timer.Elapsed;
+                timerText = "Time taken signature: " + timeTaken.ToString(@"m\:ss\.fff");
+                Console.WriteLine(timerText);
+
+                timer.Start();
                 //Submit nft transfer
                 var nftTransferResponse = await loopringService.SubmitNftTransfer(
                     apiKey: loopringApiKey,
@@ -288,12 +324,18 @@ public class Program
                     nftData: nftData,
                     transferMemo: transferMemo
                     );
+                timer.Stop();
+                timeTaken = timer.Elapsed;
+                timerText = "Time taken transfer: " + timeTaken.ToString(@"m\:ss\.fff");
+                Console.WriteLine(timerText);
+
                 Console.WriteLine(nftTransferResponse);
 
                 if(nftTransferResponse.Contains("process") || nftTransferResponse.Contains("received"))
                 {
                     try
                     {
+                        timer.Start();
                         using (SqlConnection db = new System.Data.SqlClient.SqlConnection(AzureSqlConnectionString))
                         {
                             await db.OpenAsync();
@@ -307,6 +349,10 @@ public class Program
                             };
                             await db.ExecuteAsync("INSERT INTO Claimed (Address,NftData,ClaimedDate,Amount) VALUES (@Address, @NftData, @ClaimedDate, @Amount)", insertParameters);
                         }
+                        timer.Stop();
+                        timeTaken = timer.Elapsed;
+                        timerText = "Time taken sql insert: " + timeTaken.ToString(@"m\:ss\.fff");
+                        Console.WriteLine(timerText);
                     }
                     catch (Exception ex)
                     {

@@ -12,9 +12,10 @@ using Type = LoopDropSharp.Type;
 using System.Numerics;
 using Dapper;
 using System.Data;
-using MetaboyApi.Models;
 using System.Globalization;
 using System.Data.SqlClient;
+using System.Diagnostics;
+using Microsoft.Azure.Amqp.Framing;
 
 public class Program
 {
@@ -39,7 +40,7 @@ public class Program
     static async Task Main(string[] args)
     {
         // load services
-        loopringService  = new LoopringService();
+        loopringService = new LoopringService();
 
         //Settings loaded from the appsettings.json fileq
         IConfiguration config = new ConfigurationBuilder()
@@ -67,7 +68,7 @@ public class Program
 
             // start processing 
             await processor.StartProcessingAsync();
-            Console.WriteLine("Waiting for messages...");
+            Console.WriteLine("[INFO]: Waiting for messages...");
             while (true)
             {
 
@@ -82,60 +83,80 @@ public class Program
         }
     }
 
-    // handle received messages
+    //  Receives a single nftReceiverV3 (Address, NftData, Amount) from MetaBoyAPI that has already been validated
     static async Task MessageHandler(ProcessMessageEventArgs args)
     {
         string body = args.Message.Body.ToString();
-        Console.WriteLine($"Received: {body}");
-        NftReciever nftReciever = JsonConvert.DeserializeObject<NftReciever>(body);
+        Console.WriteLine($"[INFO] Received: {body}");
+        NftRecieverV3 nftReciever = JsonConvert.DeserializeObject<NftRecieverV3>(body);
         int? validStatus = null;
         string nftAmount = "";
+        AvailableClaim availableClaim = new();
         try
-        {
+        {   
+            //  AvailableClaims is queried to validate and obtain requested amount to send in transaction
+            //  If transfer is successful, insert new CompletedClaim record and delete AvailableClaim record
             using (SqlConnection db = new System.Data.SqlClient.SqlConnection(AzureSqlConnectionString))
             {
+                Console.WriteLine($"[INFO] Processing request...");
+                // 0 = Claim is not valid - Abort!
+                // 1 = Claim is valid, CompletedClaims record not found, new record Insert will be required, AllowableClaims record will be deleted.
+                // 2 = Multiple Claim Records found! Please validate data!
+
+                
+                // Validate record with Address, NftData, and Amount
                 await db.OpenAsync();
-                var claimedListParameters = new { Address = nftReciever.Address, NftData = nftReciever.NftData };
-                var claimedListSql = "select * from claimed where nftdata = @NftData and address = @Address";
-                var claimedListResult = await db.QueryAsync<Claimed>(claimedListSql, claimedListParameters);
-                if (claimedListResult.Count() == 0)
+                var availableClaimParameters = new { NftData = nftReciever.NftData, Address = nftReciever.Address, Amount = nftReciever.Amount };
+                var availableClaimSql = "SELECT * FROM AvailableClaims WHERE nftdata = @NftData AND Address = @Address AND Amount = @Amount";
+                var availableClaimResult = await db.QueryAsync<AvailableClaim>(availableClaimSql, availableClaimParameters);
+                
+                // We should only have 1 NftData entry in Claimable Table if Nft is claimable, with a valid Amount greater than 0
+                // Set it as a new instance of AvailableClaim with Address, NftData, & Amount
+                if (availableClaimResult.Count() == 1 && int.Parse(availableClaimResult.First().Amount) > 0)
                 {
-                    var allowListParameters = new { Address = nftReciever.Address, NftData = nftReciever.NftData };
-                    var allowListSql = "select * from allowlist where nftdata = @NftData and address = @Address";
-                    var allowListResult = await db.QueryAsync<AllowList>(allowListSql, allowListParameters);
-                    if (allowListResult.Count() == 1)
+                    availableClaim = availableClaimResult.First();
+                    Console.WriteLine($"[INFO]  Found Available Claim: Address {availableClaim.Address} NftData: {availableClaim.NftData} For: {availableClaim.Amount} Nfts.");
+                    validStatus = 1;
+                }
+
+                // More than 1 record retrieved - Data validation required!
+                else if (availableClaimResult.Count() > 1)
+                {
+                    foreach (AvailableClaim claimRecord in availableClaimResult)
                     {
-                        nftAmount = allowListResult.First().Amount;
-                        validStatus = 2; //valid continue
-                    }
-                    else
-                    {
-                        validStatus = 1; //not valid, don't continue
+                        Console.WriteLine($"[ERROR]  Multiple Claim Records found in AvailableClaims For Address: {claimRecord.Address} NftData: {claimRecord.NftData} For {claimRecord.Amount} Nfts!)");
+                        validStatus = 2;
                     }
                 }
+
+                // Unexpected outcome - Abort!
                 else
                 {
-                    validStatus = 0; //not valid, don't continue
+                    Console.WriteLine($"[ERROR]  Unexpected outcome detected! Please check Address: {nftReciever.Address} NftData: {nftReciever.NftData}");
+                    validStatus = 0;
                 }
+
+                await db.CloseAsync();
             }
         }
+
         catch (Exception ex)
         {
             validStatus = 0;
             Console.WriteLine(ex.Message);
         }
 
-        if(validStatus == 2)
+        if (validStatus == 1)
         {
-            string loopringApiKey = settings.LoopringApiKey;//loopring api key KEEP PRIVATE
-            string loopringPrivateKey = settings.LoopringPrivateKey; //loopring private key KEEP PRIVATE
-            var MMorGMEPrivateKey = settings.MMorGMEPrivateKey; //metamask or gamestop private key KEEP PRIVATE
-            var fromAddress = settings.LoopringAddress; //your loopring address
-            var fromAccountId = settings.LoopringAccountId; //your loopring account id
-            var validUntil = settings.ValidUntil; //the examples seem to use this number
-            var maxFeeTokenId = settings.MaxFeeTokenId; //0 should be for ETH, 1 is for LRC
-            var exchange = settings.Exchange; //loopring exchange address, shouldn't need to change this,
-            int toAccountId = 0; //leave this as 0 DO NOT CHANGE
+            string loopringApiKey = settings.LoopringApiKey;             // Loopring api key KEEP PRIVATE
+            string loopringPrivateKey = settings.LoopringPrivateKey;     // Loopring private key KEEP PRIVATE
+            var MMorGMEPrivateKey = settings.MMorGMEPrivateKey;          // Metamask or gamestop private key KEEP PRIVATE
+            var fromAddress = settings.LoopringAddress;                  // Your loopring address
+            var fromAccountId = settings.LoopringAccountId;              // Your loopring account id
+            var validUntil = settings.ValidUntil;                        // Loopring examples use this number
+            var maxFeeTokenId = settings.MaxFeeTokenId;                  // 0 should be for ETH, 1 is for LRC
+            var exchange = settings.Exchange;                            //loopring exchange address, shouldn't need to change this,
+            int toAccountId = 0;                                         //leave this as 0 DO NOT CHANGE
             int nftTokenId;
             NftBalance userNftToken = new NftBalance();
             string nftData = nftReciever.NftData;
@@ -154,7 +175,7 @@ public class Program
 
                 //Calculate eddsa signautre
                 BigInteger[] poseidonInputs =
-        {
+                    {
                                     Utils.ParseHexUnsigned(exchange),
                                     (BigInteger) fromAccountId,
                                     (BigInteger) toAccountId,
@@ -269,6 +290,9 @@ public class Program
                 var serializedECDRSASignature = EthECDSASignature.CreateStringSignature(ECDRSASignature);
                 var ecdsaSignature = serializedECDRSASignature + "0" + (int)2;
 
+                // DEBUG //
+                Console.WriteLine($"[DEBUG]  SKIPPING TRANSFER FOR TESTING PURPOSES!!!");
+                /*
                 //Submit nft transfer
                 var nftTransferResponse = await loopringService.SubmitNftTransfer(
                     apiKey: loopringApiKey,
@@ -289,27 +313,52 @@ public class Program
                     transferMemo: transferMemo
                     );
                 Console.WriteLine(nftTransferResponse);
+                
 
-                if(nftTransferResponse.Contains("process") || nftTransferResponse.Contains("received"))
+                if (nftTransferResponse.Contains("process") || nftTransferResponse.Contains("received"))
+                //*/
+                
+                if (1 == 1) //</-- Debug -->
                 {
                     try
                     {
+                        // If Claimed record not found, go ahead and insert record into Claimed
                         using (SqlConnection db = new System.Data.SqlClient.SqlConnection(AzureSqlConnectionString))
                         {
                             await db.OpenAsync();
                             var insertParameters = new
                             {
-                                NftData = nftReciever.NftData,
-                                Address = nftReciever.Address,
+                                Address = availableClaim.Address,
+                                NftData = availableClaim.NftData,
                                 ClaimedDate = DateTime.UtcNow.ToString("yyyy-MM-dd HH:mm:ss.fffffff",
                                        CultureInfo.InvariantCulture),
-                                Amount = nftAmount
+                                Amount = availableClaim.Amount
                             };
-                            await db.ExecuteAsync("INSERT INTO Claimed (Address,NftData,ClaimedDate,Amount) VALUES (@Address, @NftData, @ClaimedDate, @Amount)", insertParameters);
+                            // Create an entry in CompletedClaims Table
+                            var recordedClaim = await db.ExecuteAsync("INSERT INTO CompletedClaims (Address, NftData, ClaimedDate, Amount) VALUES (@Address, @NftData, @ClaimedDate, @Amount");
+
+                            // Record successfully added to CompletedClaims
+                            if (recordedClaim == 0)
+                            {
+                                var removeFromAvailableClaimsParameters = new
+                                {
+                                    removeAddress = availableClaim.Address,
+                                    removeNftData = availableClaim.NftData
+                                };
+                                var deleteAvailableClaim = await db.ExecuteAsync("DELETE From allowlist where address = @Address and nftdata = @NftData", removeFromAvailableClaimsParameters);
+                                Console.WriteLine($"[INFO]  Claim completed, record removed from AvailableClaims Table. Record has been added to CompletedClaims For Address: {nftReciever.Address} NftData: {nftReciever.NftData}");
+                            }
+                            else
+                            {
+                                Console.WriteLine($"[ERROR]  Unable to insert record into CompletedClaims Table! Record has not beed deleted from AvailableClaims! Please check Address: {nftReciever.Address} NftData: {nftReciever.NftData}");
+                                validStatus = 0;
+                            }
+
                         }
                     }
                     catch (Exception ex)
                     {
+                        Console.WriteLine($"[ERROR] An error has occured processing database record update! BONK!");
                         Console.WriteLine(ex.Message);
                     }
                 }
@@ -331,11 +380,10 @@ public class Program
 
             }
         }
-        else if(validStatus == 1)
+        else if (validStatus == 0)
         {
             try
             {
-                Console.WriteLine($"This address: {nftReciever.Address}, is not in the allow list for nft: {nftReciever.NftData}");
                 await args.CompleteMessageAsync(args.Message);
             }
             catch (Exception ex)
@@ -343,11 +391,10 @@ public class Program
                 Console.WriteLine(ex.Message);
             }
         }
-        else if(validStatus == 0)
+        else if (validStatus == 2)
         {
             try
             {
-                Console.WriteLine($"This address: {nftReciever.Address}, has already claimed nft: {nftReciever.NftData}");
                 await args.CompleteMessageAsync(args.Message);
             }
             catch (Exception ex)
@@ -359,7 +406,7 @@ public class Program
         {
             try
             {
-                Console.WriteLine($"Something went wrong with address: {nftReciever.Address}, and nft: {nftReciever.NftData}");
+                Console.WriteLine($"[ERROR] Something went wrong with address: {nftReciever.Address}, and nft: {nftReciever.NftData}");
                 await args.CompleteMessageAsync(args.Message);
             }
             catch (Exception ex)

@@ -1,4 +1,4 @@
-﻿namespace MetaboyApi.Models
+﻿namespace MetaboyApiMessageProcessor.Models.RetiredModels
 {
     public class Claimed
     {

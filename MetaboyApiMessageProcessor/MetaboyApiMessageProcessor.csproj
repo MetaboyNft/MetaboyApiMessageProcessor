@@ -12,6 +12,7 @@
     <PackageReference Include="Microsoft.Extensions.Configuration.EnvironmentVariables" Version="6.0.1" />
     <PackageReference Include="Microsoft.Extensions.Configuration.Json" Version="6.0.0" />
     <PackageReference Include="Nethereum.Signer.EIP712" Version="4.1.1" />
+    <PackageReference Include="Nethereum.Util" Version="4.12.0" />
     <PackageReference Include="Nethereum.Web3" Version="4.2.0" />
     <PackageReference Include="Newtonsoft.Json" Version="13.0.1" />
     <PackageReference Include="PoseidonSharp" Version="1.0.0" />

@@ -88,7 +88,7 @@ public class Program
     {
         string body = args.Message.Body.ToString();
         Console.WriteLine($"[INFO] Received: {body}");
-        NftRecieverV3 nftReciever = JsonConvert.DeserializeObject<NftRecieverV3>(body);
+        NftReciever nftReciever = JsonConvert.DeserializeObject<NftReciever>(body);
         int? validStatus = null;
         string nftAmount = "";
         AvailableClaim availableClaim = new();
@@ -106,8 +106,8 @@ public class Program
                 
                 // Validate record with Address, NftData, and Amount
                 await db.OpenAsync();
-                var availableClaimParameters = new { NftData = nftReciever.NftData, Address = nftReciever.Address, Amount = nftReciever.Amount };
-                var availableClaimSql = "SELECT * FROM AvailableClaims WHERE nftdata = @NftData AND Address = @Address AND Amount = @Amount";
+                var availableClaimParameters = new { NftData = nftReciever.NftData, Address = nftReciever.Address };
+                var availableClaimSql = "SELECT * FROM AvailableClaims WHERE nftdata = @NftData AND Address = @Address";
                 var availableClaimResult = await db.QueryAsync<AvailableClaim>(availableClaimSql, availableClaimParameters);
                 
                 // We should only have 1 NftData entry in Claimable Table if Nft is claimable, with a valid Amount greater than 0
